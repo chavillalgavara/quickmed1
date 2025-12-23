@@ -1,7 +1,7 @@
 
 
 from rest_framework import serializers
-from .models import DeliveryPartner
+from .models import DeliveryPartner, DeliveryProfile
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 
@@ -32,6 +32,91 @@ class DeliveryPartnerSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
         ]
+
+    def validate(self, attrs):
+        """
+        Lightweight validation to surface friendly errors instead of server failures.
+        """
+        email = attrs.get("email")
+        phone = attrs.get("phone")
+        password = attrs.get("password")
+
+        # Email required
+        if not email:
+            raise serializers.ValidationError({"email": "Email is required"})
+
+        # Prevent duplicate email across DeliveryPartner or UserProfile
+        if DeliveryPartner.objects.filter(email=email).exists() or User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"email": "Email already registered"})
+
+        # Prevent duplicate phone across UserProfile
+        if phone and User.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError({"phone": "Phone already registered"})
+
+        # Basic password check (keep minimal to avoid changing flow)
+        if password and len(password) < 6:
+            raise serializers.ValidationError({"password": "Password must be at least 6 characters"})
+
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Create DeliveryPartner and linked UserProfile for authentication.
+        """
+        # Extract password (required for auth user)
+        password = validated_data.pop('password')
+
+        email = validated_data.get('email')
+        full_name = validated_data.get('full_name')
+        phone = validated_data.get('phone')
+
+        if not email:
+            raise serializers.ValidationError({"email": "Email is required."})
+
+        # Prevent duplicate auth users
+        if User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"email": "A user with this email already exists."})
+
+        # If a DeliveryPartner exists without a linked user, link it
+        existing_delivery = DeliveryPartner.objects.filter(email=email).first()
+        if existing_delivery:
+            if not existing_delivery.user:
+                user = User.objects.create_user(
+                    email=email,
+                    password=password,
+                    full_name=full_name or existing_delivery.full_name,
+                    phone=phone or existing_delivery.phone,
+                    user_type='delivery'
+                )
+                existing_delivery.user = user
+                existing_delivery.save()
+                return existing_delivery
+            else:
+                raise serializers.ValidationError({"email": "A user with this email already exists."})
+
+        # Create auth user
+        try:
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                full_name=full_name,
+                phone=phone,
+                user_type='delivery'
+            )
+        except Exception as e:
+            raise serializers.ValidationError({"error": f"Failed to create user account: {str(e)}"})
+
+        # Create delivery partner and link user
+        try:
+            delivery_partner = DeliveryPartner.objects.create(
+                user=user,
+                **validated_data
+            )
+        except Exception as e:
+            user.delete()  # rollback
+            raise serializers.ValidationError({"error": f"Failed to create delivery partner: {str(e)}"})
+
+        return delivery_partner
 
 class DeliveryPartnerProfileSerializer(serializers.ModelSerializer):
     """Serializer for delivery partner profile (read/update, no password)"""
@@ -81,145 +166,73 @@ class DeliveryPartnerProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["aadhar_number", "pan_number", "driving_license_number", "status", "created_at"]
     
+    # Helper to get/create profile
+    def _get_profile(self, obj):
+        if not obj.user:
+            return None
+        profile, _ = DeliveryProfile.objects.get_or_create(
+            user=obj.user,
+            defaults={"delivery_partner": obj}
+        )
+        if not profile.delivery_partner:
+            profile.delivery_partner = obj
+            profile.save(update_fields=["delivery_partner"])
+        return profile
+
     def get_current_location(self, obj):
-        """Get current location from UserProfile.address"""
-        if obj.user and obj.user.address:
-            return obj.user.address
-        return ''
+        profile = self._get_profile(obj)
+        return profile.current_location if profile else ''
     
     def get_vehicle_type(self, obj):
-        """Get vehicle type from UserProfile"""
-        if obj.user and obj.user.vehicle_type:
-            return obj.user.vehicle_type
-        return ''
+        profile = self._get_profile(obj)
+        return profile.vehicle_type if profile else ''
     
     def get_emergency_contact1_name(self, obj):
-        """Get emergency contact 1 name from UserProfile.apartment (stored as JSON)"""
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact1_name', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact1_name if profile else ''
     
     def get_emergency_contact1_phone(self, obj):
-        """Get emergency contact 1 phone"""
-        if obj.user and obj.user.emergency_contact:
-            return obj.user.emergency_contact
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact1_phone', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact1_phone if profile else ''
     
     def get_emergency_contact1_relation(self, obj):
-        """Get emergency contact 1 relation"""
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact1_relation', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact1_relation if profile else ''
     
     def get_emergency_contact2_name(self, obj):
-        """Get emergency contact 2 name"""
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact2_name', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact2_name if profile else ''
     
     def get_emergency_contact2_phone(self, obj):
-        """Get emergency contact 2 phone"""
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact2_phone', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact2_phone if profile else ''
     
     def get_emergency_contact2_relation(self, obj):
-        """Get emergency contact 2 relation"""
-        if obj.user and obj.user.apartment:
-            try:
-                import json
-                data = json.loads(obj.user.apartment)
-                return data.get('emergency_contact2_relation', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.emergency_contact2_relation if profile else ''
     
     def get_bank_account_number(self, obj):
-        """Get bank account number"""
-        if obj.user and obj.user.delivery_address:
-            try:
-                import json
-                data = json.loads(obj.user.delivery_address)
-                return data.get('bank_account_number', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.bank_account_number if profile else ''
     
     def get_bank_account_holder(self, obj):
-        """Get bank account holder"""
-        if obj.user and obj.user.delivery_address:
-            try:
-                import json
-                data = json.loads(obj.user.delivery_address)
-                return data.get('bank_account_holder', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.bank_account_holder if profile else ''
     
     def get_bank_name(self, obj):
-        """Get bank name"""
-        if obj.user and obj.user.delivery_address:
-            try:
-                import json
-                data = json.loads(obj.user.delivery_address)
-                return data.get('bank_name', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.bank_name if profile else ''
     
     def get_ifsc_code(self, obj):
-        """Get IFSC code"""
-        if obj.user and obj.user.delivery_address:
-            try:
-                import json
-                data = json.loads(obj.user.delivery_address)
-                return data.get('ifsc_code', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.ifsc_code if profile else ''
     
     def get_upi_id(self, obj):
-        """Get UPI ID"""
-        if obj.user and obj.user.delivery_address:
-            try:
-                import json
-                data = json.loads(obj.user.delivery_address)
-                return data.get('upi_id', '')
-            except:
-                pass
-        return ''
+        profile = self._get_profile(obj)
+        return profile.upi_id if profile else ''
     
     def update(self, instance, validated_data):
         """Update delivery partner and related UserProfile"""
-        import json
-        
         # Update DeliveryPartner fields
         instance.full_name = validated_data.get('full_name', instance.full_name)
         instance.phone = validated_data.get('phone', instance.phone)
@@ -235,65 +248,48 @@ class DeliveryPartnerProfileSerializer(serializers.ModelSerializer):
                 instance.user.full_name = validated_data['full_name']
             if 'vehicle_number' in validated_data:
                 instance.user.vehicle_number = validated_data['vehicle_number']
-            
-            # Get additional data from context (passed from view)
+
+            # Update DeliveryProfile (separate table)
             request = self.context.get('request')
-            if request:
-                # Update current_location (stored in address)
+            profile = self._get_profile(instance)
+            if request and profile:
+                # Current location & vehicle
                 if 'current_location' in request.data:
-                    instance.user.address = request.data['current_location']
-                
-                # Update vehicle_type
+                    profile.current_location = request.data['current_location']
                 if 'vehicle_type' in request.data:
-                    instance.user.vehicle_type = request.data['vehicle_type']
-                
-                # Update emergency contacts (stored in apartment as JSON)
-                emergency_data = {}
-                if instance.user.apartment:
-                    try:
-                        emergency_data = json.loads(instance.user.apartment)
-                    except:
-                        pass
-                
+                    profile.vehicle_type = request.data['vehicle_type']
+                if 'vehicle_number' in request.data:
+                    profile.vehicle_number = request.data['vehicle_number']
+
+                # Emergency contacts
                 if 'emergency_contact1_name' in request.data:
-                    emergency_data['emergency_contact1_name'] = request.data['emergency_contact1_name']
+                    profile.emergency_contact1_name = request.data['emergency_contact1_name']
                 if 'emergency_contact1_phone' in request.data:
-                    emergency_data['emergency_contact1_phone'] = request.data['emergency_contact1_phone']
-                    instance.user.emergency_contact = request.data['emergency_contact1_phone']  # Also store in main field
+                    profile.emergency_contact1_phone = request.data['emergency_contact1_phone']
+                    # keep legacy emergency_contact on user for backwards compatibility
+                    instance.user.emergency_contact = request.data['emergency_contact1_phone']
                 if 'emergency_contact1_relation' in request.data:
-                    emergency_data['emergency_contact1_relation'] = request.data['emergency_contact1_relation']
+                    profile.emergency_contact1_relation = request.data['emergency_contact1_relation']
                 if 'emergency_contact2_name' in request.data:
-                    emergency_data['emergency_contact2_name'] = request.data['emergency_contact2_name']
+                    profile.emergency_contact2_name = request.data['emergency_contact2_name']
                 if 'emergency_contact2_phone' in request.data:
-                    emergency_data['emergency_contact2_phone'] = request.data['emergency_contact2_phone']
+                    profile.emergency_contact2_phone = request.data['emergency_contact2_phone']
                 if 'emergency_contact2_relation' in request.data:
-                    emergency_data['emergency_contact2_relation'] = request.data['emergency_contact2_relation']
-                
-                if emergency_data:
-                    instance.user.apartment = json.dumps(emergency_data)
-                
-                # Update bank details (stored in delivery_address as JSON)
-                bank_data = {}
-                if instance.user.delivery_address:
-                    try:
-                        bank_data = json.loads(instance.user.delivery_address)
-                    except:
-                        pass
-                
+                    profile.emergency_contact2_relation = request.data['emergency_contact2_relation']
+
+                # Bank
                 if 'bank_account_number' in request.data:
-                    bank_data['bank_account_number'] = request.data['bank_account_number']
+                    profile.bank_account_number = request.data['bank_account_number']
                 if 'bank_account_holder' in request.data:
-                    bank_data['bank_account_holder'] = request.data['bank_account_holder']
+                    profile.bank_account_holder = request.data['bank_account_holder']
                 if 'bank_name' in request.data:
-                    bank_data['bank_name'] = request.data['bank_name']
+                    profile.bank_name = request.data['bank_name']
                 if 'ifsc_code' in request.data:
-                    bank_data['ifsc_code'] = request.data['ifsc_code']
+                    profile.ifsc_code = request.data['ifsc_code']
                 if 'upi_id' in request.data:
-                    bank_data['upi_id'] = request.data['upi_id']
-                
-                if bank_data:
-                    instance.user.delivery_address = json.dumps(bank_data)
-            
+                    profile.upi_id = request.data['upi_id']
+
+                profile.save()
             instance.user.save()
         
         return instance

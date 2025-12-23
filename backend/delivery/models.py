@@ -49,6 +49,50 @@ class DeliveryPartner(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.full_name
+
+
+class DeliveryProfile(models.Model):
+    """
+    Holds delivery partner profile details separately from auth UserProfile.
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="delivery_profile"
+    )
+    delivery_partner = models.OneToOneField(
+        DeliveryPartner,
+        on_delete=models.CASCADE,
+        related_name="profile",
+        null=True,
+        blank=True
+    )
+
+    current_location = models.TextField(blank=True, null=True)
+    vehicle_type = models.CharField(max_length=50, blank=True)
+    vehicle_number = models.CharField(max_length=20, blank=True)
+
+    # Emergency contacts
+    emergency_contact1_name = models.CharField(max_length=100, blank=True)
+    emergency_contact1_phone = models.CharField(max_length=15, blank=True)
+    emergency_contact1_relation = models.CharField(max_length=50, blank=True)
+    emergency_contact2_name = models.CharField(max_length=100, blank=True)
+    emergency_contact2_phone = models.CharField(max_length=15, blank=True)
+    emergency_contact2_relation = models.CharField(max_length=50, blank=True)
+
+    # Bank details
+    bank_account_number = models.CharField(max_length=30, blank=True)
+    bank_account_holder = models.CharField(max_length=100, blank=True)
+    bank_name = models.CharField(max_length=100, blank=True)
+    ifsc_code = models.CharField(max_length=20, blank=True)
+    upi_id = models.CharField(max_length=50, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"DeliveryProfile({self.user.email})"

@@ -3399,7 +3399,15 @@ try {
   const data = await response.json();
 
   if (!response.ok) {
-    setToastMessage("Signup failed");
+    // Show backend error message if available
+    const msg =
+      data?.error ||
+      data?.detail ||
+      (typeof data === "object"
+        ? Object.values(data)[0]
+        : null) ||
+      "Signup failed";
+    setToastMessage(msg);
     setToastType("error");
     setShowToast(true);
     setIsLoading(false);
