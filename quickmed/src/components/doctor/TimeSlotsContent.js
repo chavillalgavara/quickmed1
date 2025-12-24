@@ -1,14 +1,53 @@
 import React, { useState, useEffect } from 'react';
 
-const TimeSlotsContent = ({ state, actions }) => {
-  const { timeslots } = state;
-  const { 
-    setTimeslots, 
-    addTimeslot, 
-    updateTimeslot, 
-    deleteTimeslot,
-    toggleTimeslotAvailability 
-  } = actions;
+const TimeSlotsContent = ({ state = {}, actions = {} }) => {
+  const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:8000";
+
+  const { timeslots = [] } = state;
+  const { setTimeslots = () => {} } = actions;
+
+  const deleteTimeslot = async (slotId) => {
+  try {
+    await fetch(
+      `${API_BASE}/api/doctor/timeslots/${slotId}/delete/`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+        },
+      }
+    );
+
+    setTimeslots(prev =>
+      prev.filter(slot => slot.id !== slotId)
+    );
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+  const toggleTimeslotAvailability = async (slotId) => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/doctor/timeslots/${slotId}/toggle/`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    setTimeslots((prev) =>
+      prev.map((slot) => (slot.id === slotId ? data : slot))
+    );
+  } catch (error) {
+    console.error(error);
+  }
+};
+
 
   // Simple responsive check
   const isMobile = window.innerWidth <= 768;
@@ -24,12 +63,27 @@ const TimeSlotsContent = ({ state, actions }) => {
   });
 
   // Initialize with default slots for next 7 days
-  useEffect(() => {
-    if (timeslots.length === 0) {
-      const defaultSlots = generateDefaultSlots();
-      setTimeslots(defaultSlots);
+ useEffect(() => {
+  const fetchDoctorSlots = async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/doctor/timeslots/`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+      setTimeslots(data);
+    } catch (error) {
+      console.error("Failed to fetch slots", error);
     }
-  }, []);
+  };
+
+  fetchDoctorSlots();
+}, []);
 
   // Generate default slots for next 7 days
   const generateDefaultSlots = () => {
@@ -71,38 +125,121 @@ const TimeSlotsContent = ({ state, actions }) => {
   const getSlotsForDate = (date) => {
     return timeslots
       .filter(slot => slot.date === date)
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      .sort((a, b) => a.start_time.localeCompare(b.start_time));
   };
 
   // Add a new time slot
-  const handleAddSlot = () => {
+  const handleAddSlot = async () => {
     if (!selectedDate) {
-      alert('Please select a date');
+      alert("Please select a date");
       return;
     }
 
-    // Calculate end time based on duration
-    const startTime = selectedTime;
-    const [hours, minutes] = startTime.split(':').map(Number);
-    const endTime = new Date(0, 0, 0, hours, minutes + slotDuration);
-    const endTimeString = `${endTime.getHours().toString().padStart(2, '0')}:${endTime.getMinutes().toString().padStart(2, '0')}`;
+    if (!selectedTime) {
+      alert("Please select a start time");
+      return;
+    }
 
-    const newSlot = {
-      id: `${selectedDate}-${startTime}`,
+    const [h, m] = selectedTime.split(":").map(Number);
+    // Calculate end time by adding duration to start time
+    const totalMinutes = h * 60 + m + slotDuration;
+    const endHours = Math.floor(totalMinutes / 60) % 24;
+    const endMinutes = totalMinutes % 60;
+    const endTimeString = `${endHours.toString().padStart(2, "0")}:${endMinutes
+      .toString()
+      .padStart(2, "0")}`;
+
+    const payload = {
       date: selectedDate,
-      startTime: startTime,
-      endTime: endTimeString,
+      start_time: selectedTime,
+      end_time: endTimeString,
       duration: slotDuration,
-      isAvailable: true,
-      isBooked: false
     };
 
-    addTimeslot(newSlot);
-    
-    // Reset form
-    setSelectedTime('09:00');
-    setSlotDuration(30);
+    console.log("Adding slot with payload:", payload);
+
+    try {
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        alert("You are not logged in. Please log in and try again.");
+        return;
+      }
+
+      const response = await fetch(
+        `${API_BASE}/api/doctor/timeslots/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      console.log("Response status:", response.status);
+      console.log("Response ok:", response.ok);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { detail: `Server error (${response.status}): ${response.statusText}` };
+        }
+        
+        console.error("Error response:", errorData);
+        console.error("Response status:", response.status);
+        
+        // Handle Django REST Framework validation errors
+        let errorMessage = "Error adding slot. Please try again.";
+        
+        if (errorData.non_field_errors) {
+          errorMessage = Array.isArray(errorData.non_field_errors) 
+            ? errorData.non_field_errors.join(", ")
+            : errorData.non_field_errors;
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        } else if (errorData.message) {
+          errorMessage = errorData.message;
+        } else if (typeof errorData === 'object' && Object.keys(errorData).length > 0) {
+          // Parse field-specific errors
+          const fieldErrors = Object.entries(errorData)
+            .map(([field, errors]) => {
+              const errorList = Array.isArray(errors) ? errors.join(", ") : errors;
+              return `${field}: ${errorList}`;
+            })
+            .join("\n");
+          
+          if (fieldErrors) {
+            errorMessage = fieldErrors;
+          }
+        }
+        
+        alert(errorMessage);
+        return;
+      }
+
+      const data = await response.json();
+      
+      // Add the new slot to the state
+      setTimeslots((prev) => [...prev, data]);
+      
+      // Reset form after successful creation
+      setSelectedDate('');
+      setSelectedTime('09:00');
+      setSlotDuration(30);
+      
+      // Optional: Show success message
+      console.log("Slot added successfully:", data);
+    } catch (error) {
+      console.error("Error adding slot:", error);
+      alert("Failed to add slot. Please check your connection and try again.");
+    }
   };
+
+    // Calculate end time based on duration
+   
 
   // Quick action: Mark entire day as available/unavailable
   const handleMarkDay = (date, makeAvailable) => {
@@ -150,28 +287,28 @@ const TimeSlotsContent = ({ state, actions }) => {
 
   // Time Slot Component
   const TimeSlotItem = ({ slot }) => {
-    const isDisabled = slot.isBooked;
+    const isDisabled = slot.is_booked;
     
     return (
       <div style={{
         ...styles.timeSlotItem,
         backgroundColor: isDisabled ? '#E0F2F1' : 
-                        slot.isAvailable ? '#f0fdf4' : '#fef2f2',
+                        slot.is_available ? '#f0fdf4' : '#fef2f2',
         borderColor: isDisabled ? '#E0F2F1' : 
-                     slot.isAvailable ? '#bbf7d0' : '#fecaca'
+                     slot.is_available ? '#bbf7d0' : '#fecaca'
       }}>
         <div style={styles.slotInfo}>
           <div style={styles.slotTime}>
-            <strong>{slot.startTime} - {slot.endTime}</strong>
+            <strong>{slot.start_time} - {slot.end_time}</strong>
             <span style={styles.duration}>({slot.duration} min)</span>
           </div>
           <div style={styles.slotStatus}>
             <span style={{
               ...styles.statusBadge,
-              backgroundColor: slot.isBooked ? '#dc2626' : 
-                              slot.isAvailable ? '#16a34a' : '#d97706'
+              backgroundColor: slot.is_booked ? '#dc2626' : 
+                              slot.is_available ? '#16a34a' : '#d97706'
             }}>
-              {slot.isBooked ? 'Booked' : slot.isAvailable ? 'Available' : 'Busy'}
+              {slot.is_booked ? 'Booked' : slot.is_available ? 'Available' : 'Busy'}
             </span>
           </div>
         </div>
@@ -180,10 +317,10 @@ const TimeSlotsContent = ({ state, actions }) => {
           {!isDisabled && (
             <>
               <button
-                style={slot.isAvailable ? styles.busyButton : styles.availableButton}
+                style={slot.is_available ? styles.busyButton : styles.availableButton}
                 onClick={() => toggleTimeslotAvailability(slot.id)}
               >
-                {slot.isAvailable ? 'Mark Busy' : 'Mark Free'}
+                {slot.is_available ? 'Mark Busy' : 'Mark Free'}
               </button>
               <button
                 style={styles.deleteButton}
@@ -204,8 +341,8 @@ const TimeSlotsContent = ({ state, actions }) => {
   // Day Card Component
   const DayCard = ({ date }) => {
     const slots = getSlotsForDate(date);
-    const availableSlots = slots.filter(s => s.isAvailable && !s.isBooked).length;
-    const bookedSlots = slots.filter(s => s.isBooked).length;
+    const availableSlots = slots.filter(s => s.is_available && !s.is_booked).length;
+    const bookedSlots = slots.filter(s => s.is_booked).length;
     
     return (
       <div style={styles.dayCard}>
@@ -293,13 +430,13 @@ const TimeSlotsContent = ({ state, actions }) => {
       <div style={styles.statsBar}>
         <div style={styles.statCard}>
           <span style={styles.statValue}>
-            {timeslots.filter(s => s.isAvailable && !s.isBooked).length}
+            {timeslots.filter(s => s.is_available && !s.is_booked).length}
           </span>
           <span style={styles.statText}>Available Slots</span>
         </div>
         <div style={styles.statCard}>
           <span style={styles.statValue}>
-            {timeslots.filter(s => s.isBooked).length}
+            {timeslots.filter(s => s.is_booked).length}
           </span>
           <span style={styles.statText}>Booked Appointments</span>
         </div>
@@ -354,7 +491,11 @@ const TimeSlotsContent = ({ state, actions }) => {
           </div>
           
           <button
-            style={styles.addButton}
+            style={{
+              ...styles.addButton,
+              opacity: !selectedDate ? 0.6 : 1,
+              cursor: !selectedDate ? 'not-allowed' : 'pointer'
+            }}
             onClick={handleAddSlot}
             disabled={!selectedDate}
           >
