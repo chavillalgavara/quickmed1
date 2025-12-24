@@ -668,6 +668,7 @@ const OrdersView = ({ orders: initialOrders, setActiveView, startLiveTracking })
   }, []);
   
   useEffect(() => { 
+    console.log('OrdersView: initialOrders updated', initialOrders?.length || 0);
     setOrders(initialOrders || []); 
   }, [initialOrders]);
   
@@ -707,7 +708,7 @@ const OrdersView = ({ orders: initialOrders, setActiveView, startLiveTracking })
     if (statusFilter !== 'all') {
       const statusMap = { 
         delivered: ['Delivered'], 
-        cancelled: ['Cancelled'], 
+        cancelled: ['Cancelled'],   
         returned: ['Returned'], 
         confirmed: ['Confirmed'], 
         pending: ['Pending'] 

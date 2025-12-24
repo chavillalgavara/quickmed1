@@ -3,9 +3,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny#this is used for the to send a medicine to the user dashbord 
 from rest_framework.response import Response
 from rest_framework import status
+import time
 
-from .models import VendorMedicine
-from .serializers import VendorMedicineSerializer
+from .models import VendorMedicine, Order
+from .serializers import VendorMedicineSerializer, OrderSerializer
 from accounts.models import UserProfile
 
 
@@ -145,3 +146,176 @@ def public_medicine_list(request):
     medicines = VendorMedicine.objects.all()
     serializer = VendorMedicineSerializer(medicines, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ==================================================
+# CREATE ORDER (POST) - User places order
+# ==================================================
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_order(request):
+    """
+    Create a new order (called by user after payment success)
+    """
+    try:
+        # Get logged-in customer (user)
+        customer = request.user
+        
+        # Get vendor from order data (vendorId or vendorName)
+        vendor_id = request.data.get('vendorId')
+        vendor = None
+        
+        if vendor_id:
+            try:
+                vendor = UserProfile.objects.get(id=vendor_id, user_type='vendor')
+            except UserProfile.DoesNotExist:
+                # If vendor not found by ID, try to find first available vendor
+                vendor = UserProfile.objects.filter(user_type='vendor').first()
+        
+        if not vendor:
+            vendor = UserProfile.objects.filter(user_type='vendor').first()
+        
+        if not vendor:
+            return Response(
+                {"error": "No vendor available"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate order_id if not provided
+        order_id_input = request.data.get('orderId') or request.data.get('id')
+        if not order_id_input:
+            order_id_input = f"ORD{int(time.time() * 1000)}"
+        elif not order_id_input.startswith('ORD'):
+            order_id_input = f"ORD{order_id_input}"
+        
+        # Create order data
+        order_data = {
+            'order_id': order_id_input,
+            'customer': customer.id,
+            'vendor': vendor.id,
+            'items': request.data.get('items', []),
+            'subtotal': request.data.get('subtotal', 0),
+            'tip': request.data.get('tip', 0),
+            'total': request.data.get('total', 0),
+            'status': 'pending',  # Orders start as pending for vendor
+            'delivery_type': request.data.get('deliveryType', 'home'),
+            'address': request.data.get('address'),
+            'payment_id': request.data.get('paymentId'),
+            'razorpay_order_id': request.data.get('razorpayOrderId'),
+            'razorpay_signature': request.data.get('razorpaySignature'),
+            'customer_name': request.data.get('customerName') or (customer.full_name if hasattr(customer, 'full_name') else None) or customer.email,
+            'customer_phone': request.data.get('customerPhone') or (customer.phone if hasattr(customer, 'phone') else None),
+            'prescription_required': request.data.get('prescriptionRequired', False),
+        }
+        
+        serializer = OrderSerializer(data=order_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ==================================================
+# GET VENDOR ORDERS (GET) - Vendor fetches their orders
+# ==================================================
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def vendor_orders_list(request):
+    """
+    Get all orders for logged-in vendor, grouped by status
+    """
+    try:
+        # Get logged-in vendor
+        vendor = UserProfile.objects.get(
+            email=request.user.email,
+            user_type="vendor"
+        )
+        
+        # Fetch all orders for this vendor
+        orders = Order.objects.filter(vendor=vendor).order_by('-order_time')
+        
+        # Group orders by status
+        orders_by_status = {
+            'pending': [],
+            'ready': [],
+            'picked': [],
+            'cancelled': [],
+            'confirmed': [],
+            'delivered': []
+        }
+        
+        serializer = OrderSerializer(orders, many=True)
+        
+        for order_data in serializer.data:
+            order_status = order_data.get('status', 'pending')
+            if order_status in orders_by_status:
+                # Format order data for frontend
+                formatted_order = {
+                    'id': order_data['order_id'],
+                    'customerName': order_data.get('customer_name', ''),
+                    'customerPhone': order_data.get('customer_phone', ''),
+                    'items': order_data.get('items', []),
+                    'total': float(order_data.get('total', 0)),
+                    'orderTime': order_data.get('order_time', ''),
+                    'deliveryType': order_data.get('delivery_type', 'home'),
+                    'address': order_data.get('address'),
+                    'prescriptionRequired': order_data.get('prescription_required', False),
+                }
+                orders_by_status[order_status].append(formatted_order)
+        
+        return Response(orders_by_status, status=status.HTTP_200_OK)
+        
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "Vendor profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+# ==================================================
+# UPDATE ORDER STATUS (PATCH) - Vendor updates order status
+# ==================================================
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def update_order_status(request, order_id):
+    """
+    Update order status (e.g., pending -> ready -> picked)
+    """
+    try:
+        vendor = UserProfile.objects.get(
+            email=request.user.email,
+            user_type="vendor"
+        )
+        
+        order = Order.objects.get(order_id=order_id, vendor=vendor)
+        
+        new_status = request.data.get('status')
+        if new_status:
+            order.status = new_status
+            order.save()
+            
+            serializer = OrderSerializer(order)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        return Response(
+            {"error": "Status is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        
+    except Order.DoesNotExist:
+        return Response(
+            {"error": "Order not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "Vendor profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )

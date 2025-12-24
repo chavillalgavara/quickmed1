@@ -12,20 +12,33 @@ const VendorProfile = ({
   const [isOnline, setIsOnline] = useState(true);
   const [lastSeen, setLastSeen] = useState(new Date());
 
+  // Helper function to check if a value is valid (not empty)
+  const isValid = (value) => value && typeof value === 'string' && value.trim() !== '';
+
+  // Check individual sections for completion
+  const hasLicenseNumber = isValid(userProfile?.licenseNumber);
+  const hasGstNumber = isValid(userProfile?.gstNumber);
+  const hasAddress = isValid(userProfile?.businessAddress) || isValid(userProfile?.address); // Support both field names
+  const hasCity = isValid(userProfile?.city);
+  const hasState = isValid(userProfile?.state);
+  const hasPincode = isValid(userProfile?.pincode);
+  
   // Check if legal and address details are filled (not just existing in object)
   const hasValidLegalData = 
-    userProfile?.licenseNumber && userProfile.licenseNumber.trim() !== '' &&
-    userProfile?.gstNumber && userProfile.gstNumber.trim() !== '' &&
-    userProfile?.address && userProfile.address.trim() !== '' &&
-    userProfile?.city && userProfile.city.trim() !== '' &&
-    userProfile?.state && userProfile.state.trim() !== '' &&
-    userProfile?.pincode && userProfile.pincode.trim() !== '';
+    hasLicenseNumber &&
+    hasGstNumber &&
+    hasAddress &&
+    hasCity &&
+    hasState &&
+    hasPincode;
+
+  // Check individual basic info fields
+  const hasFullName = isValid(userProfile?.fullName);
+  const hasEmail = isValid(userProfile?.email);
+  const hasPhone = isValid(userProfile?.phone);
 
   // Check if basic business info is complete
-  const hasBasicBusinessInfo = 
-    userProfile?.fullName && userProfile.fullName.trim() !== '' &&
-    userProfile?.email && userProfile.email.trim() !== '' &&
-    userProfile?.phone && userProfile.phone.trim() !== '';
+  const hasBasicBusinessInfo = hasFullName && hasEmail && hasPhone;
 
   // Overall profile completion status
   const isProfileComplete = hasBasicBusinessInfo && hasValidLegalData;
@@ -349,8 +362,16 @@ const VendorProfile = ({
 
       <div style={styles.profileContainer}>
         <div style={styles.profileCard}>
-          {/* Profile Incomplete Badge - Show by default until all details are filled */}
-          {!isProfileComplete && (
+          {/* Profile Status Badge */}
+          {isProfileComplete ? (
+            <div style={{
+              ...styles.incompleteBadge,
+              backgroundColor: '#10b981',
+              color: '#FFFFFF'
+            }}>
+              ✅ Profile Complete
+            </div>
+          ) : (
             <div style={styles.incompleteBadge}>
               ⚠️ Profile Incomplete
             </div>
@@ -403,7 +424,21 @@ const VendorProfile = ({
 
             {/* Business Information Section */}
             <div style={styles.profileSection}>
-              <h3 style={styles.profileSectionTitle}>Business Information</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '10px', borderBottom: '2px solid #E0F2F1' }}>
+                <h3 style={styles.profileSectionTitle}>Business Information</h3>
+                {hasBasicBusinessInfo && (
+                  <span style={{
+                    backgroundColor: '#10b981',
+                    color: '#FFFFFF',
+                    padding: '4px 12px',
+                    borderRadius: '12px',
+                    fontSize: '12px',
+                    fontWeight: '600'
+                  }}>
+                    ✅ Complete
+                  </span>
+                )}
+              </div>
               <div style={styles.profileInfoGrid}>
                 <div style={styles.profileInfoItem}>
                   <span style={styles.profileInfoLabel}>Owner Name</span>
@@ -461,30 +496,74 @@ const VendorProfile = ({
             {/* Legal & Address Details Section - ONLY SHOW WHEN DATA EXISTS */}
             {hasValidLegalData ? (
               <div style={styles.profileSection}>
-                <h3 style={styles.profileSectionTitle}>Legal & Address Details</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '10px', borderBottom: '2px solid #E0F2F1' }}>
+                  <h3 style={styles.profileSectionTitle}>Legal & Address Details</h3>
+                  <span style={{
+                    backgroundColor: '#10b981',
+                    color: '#FFFFFF',
+                    padding: '4px 12px',
+                    borderRadius: '12px',
+                    fontSize: '12px',
+                    fontWeight: '600'
+                  }}>
+                    ✅ Complete
+                  </span>
+                </div>
                 <div style={styles.profileInfoGrid}>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>License Number</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>License Number</span>
+                      {hasLicenseNumber && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
                     <span style={styles.profileInfoValue}>{userProfile.licenseNumber}</span>
                   </div>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>GST Number</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>GST Number</span>
+                      {hasGstNumber && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
                     <span style={styles.profileInfoValue}>{userProfile.gstNumber}</span>
                   </div>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>Address</span>
-                    <span style={styles.profileInfoValue}>{userProfile.address}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>Address</span>
+                      {hasAddress && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
+                    <span style={styles.profileInfoValue}>
+                      {userProfile.businessAddress || userProfile.address || 'Not provided'}
+                    </span>
                   </div>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>City</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>City</span>
+                      {hasCity && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
                     <span style={styles.profileInfoValue}>{userProfile.city}</span>
                   </div>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>State</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>State</span>
+                      {hasState && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
                     <span style={styles.profileInfoValue}>{userProfile.state}</span>
                   </div>
                   <div style={styles.profileInfoItem}>
-                    <span style={styles.profileInfoLabel}>Pincode</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={styles.profileInfoLabel}>Pincode</span>
+                      {hasPincode && (
+                        <span style={{ fontSize: '12px', color: '#10b981', fontWeight: '600' }}>✅</span>
+                      )}
+                    </div>
                     <span style={styles.profileInfoValue}>{userProfile.pincode}</span>
                   </div>
                 </div>

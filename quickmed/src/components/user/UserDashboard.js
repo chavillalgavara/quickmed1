@@ -3185,6 +3185,29 @@ const saveAppointmentsToLocalStorage = (appointments) => {
   }
 };
 
+// Helper function to save orders to localStorage
+const saveOrdersToLocalStorage = (orders) => {
+  try {
+    localStorage.setItem('quickmed_orders', JSON.stringify(orders));
+  } catch (error) {
+    console.error('Error saving orders to localStorage:', error);
+  }
+};
+
+// Helper function to load orders from localStorage
+const loadOrdersFromLocalStorage = () => {
+  try {
+    const savedOrders = localStorage.getItem('quickmed_orders');
+    if (savedOrders) {
+      return JSON.parse(savedOrders);
+    }
+  } catch (error) {
+    console.error('Error loading orders from localStorage:', error);
+    localStorage.removeItem('quickmed_orders');
+  }
+  return [];
+};
+
 // Helper function to load appointments from localStorage
 const loadAppointmentsFromLocalStorage = () => {
   try {
@@ -3241,7 +3264,7 @@ const UserDashboardContent = ({ user, onLogout, onWriteReview }) => {
   const [cart, setCart] = useState(() => loadCartFromLocalStorage());
   const [searchQuery, setSearchQuery] = useState('');
   const [medicines, setMedicines] = useState([]);
-  const [orders, setOrders] = useState([]);
+   const [orders, setOrders] = useState(() => loadOrdersFromLocalStorage());
   const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [showChatbot, setShowChatbot] = useState(false);
@@ -3350,6 +3373,11 @@ const UserDashboardContent = ({ user, onLogout, onWriteReview }) => {
   useEffect(() => {
     saveCartToLocalStorage(cart);
   }, [cart]);
+
+  // Save orders to localStorage whenever they change
+  useEffect(() => {
+    saveOrdersToLocalStorage(orders);
+  }, [orders]);
   // ✅ STEP 3: Fetch medicines from backend
 // ✅ STEP 3: Fetch PUBLIC medicines for USER
 useEffect(() => {
@@ -4026,6 +4054,41 @@ useEffect(() => {
     }
   };
 
+  // Save order to backend
+  const saveOrderToBackend = async (orderData) => {
+    try {
+      const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:8000";
+      const token = localStorage.getItem("access_token");
+      
+      if (!token) {
+        console.error("No authentication token found");
+        return null;
+      }
+      
+      const response = await fetch(`${API_BASE}/api/vendor/orders/create/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(orderData),
+      });
+      
+      if (response.ok) {
+        const savedOrder = await response.json();
+        console.log('Order saved to backend:', savedOrder);
+        return savedOrder;
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error saving order to backend:', errorData);
+        return null;
+      }
+    } catch (error) {
+      console.error('Exception saving order to backend:', error);
+      return null;
+    }
+  };
+
   // Updated handlePaymentSuccess to handle tip data
   const handlePaymentSuccess = async (paymentResponse, checkoutData = null) => {
     try {
@@ -4036,9 +4099,42 @@ useEffect(() => {
       
       // If checkoutData is provided (from CartView with tip), use it
       if (checkoutData) {
+        // Get vendor info from cart items
+        const vendorInfo = checkoutData.cartItems?.[0] || {};
+        
+        // Prepare order data for backend
+        const orderDataForBackend = {
+          orderId: orderId,
+          id: orderId,
+          items: (checkoutData.cartItems || []).map(item => ({
+            name: item.name || item.medicine_name,
+            quantity: item.quantity || 1,
+            price: item.price || 0
+          })),
+          subtotal: checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0)),
+          tip: checkoutData.tip || 0,
+          total: checkoutData.totalAmount || getTotalPrice(),
+          vendorId: vendorInfo.vendorId || null,
+          vendorName: vendorInfo.vendorName || null,
+          deliveryType: 'home',
+          address: checkoutData.address || null,
+          paymentId: paymentResponse.razorpay_payment_id,
+          razorpayOrderId: paymentResponse.razorpay_order_id,
+          razorpaySignature: paymentResponse.razorpay_signature,
+          customerName: checkoutData.address?.fullName || profile?.fullName || user?.email || 'Customer',
+          customerPhone: checkoutData.address?.phone || profile?.phone || '',
+          prescriptionRequired: (checkoutData.cartItems || []).some(item => item.prescriptionRequired || item.prescription_required)
+        };
+        
+        // Save to backend (don't wait for it to complete - do it asynchronously)
+        saveOrderToBackend(orderDataForBackend).catch(err => {
+          console.error('Background order save failed:', err);
+        });
+        
+        // Create local order for immediate UI update
         const newOrder = {
           id: orderId,
-          date: new Date().toISOString().split('T')[0],
+          date: new Date().toISOString(), // Store full ISO timestamp for proper filtering
           items: checkoutData.cartItems || [],
           total: checkoutData.totalAmount || getTotalPrice(),
           subtotal: checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0)),
@@ -4054,16 +4150,42 @@ useEffect(() => {
             estimatedTime: '30 min' 
           },
           address: checkoutData.address || null,
-          selectedItems: checkoutData.selectedItems || []
+          selectedItems: checkoutData.selectedItems || [],
+          vendorId: vendorInfo.vendorId || null,
+          vendorName: vendorInfo.vendorName || null
         };
         
-        setOrders(prev => [newOrder, ...prev]);
+        setOrders(prev => {
+          const updatedOrders = [newOrder, ...prev];
+          console.log('Order added! Total orders:', updatedOrders.length);
+          return updatedOrders;
+        });
         
-        // Remove selected items from cart
-        if (checkoutData.selectedItems && checkoutData.selectedItems.length > 0) {
-          setCart(prev => prev.filter(item => !checkoutData.selectedItems.includes(item.id)));
+        // Remove items that were ordered from cart
+        // Use cartItems from checkoutData to identify which items to remove
+        const orderedItemIds = (checkoutData.cartItems || []).map(item => item.id);
+        
+        if (orderedItemIds.length > 0) {
+          setCart(prev => {
+            const remainingItems = prev.filter(item => !orderedItemIds.includes(item.id));
+            console.log('Removing ordered items from cart:', orderedItemIds);
+            console.log('Cart before:', prev.length, 'items');
+            console.log('Cart after:', remainingItems.length, 'items');
+            return remainingItems;
+          });
         } else {
-          clearCart();
+          // Fallback: Use selectedItems if cartItems not available
+          if (checkoutData.selectedItems && checkoutData.selectedItems.length > 0) {
+            setCart(prev => {
+              const remainingItems = prev.filter(item => !checkoutData.selectedItems.includes(item.id));
+              console.log('Removing selected items from cart:', checkoutData.selectedItems);
+              return remainingItems;
+            });
+          } else {
+            // If nothing specified, clear entire cart (all items were checked out)
+            console.log('Clearing entire cart (no item IDs specified)');
+            clearCart();
+          }
         }
         
         addNotification(
@@ -4073,10 +4195,10 @@ useEffect(() => {
         );
         
       } else {
-        // Original logic for regular checkout
+        // Original logic for regular checkout (fallback)
         const newOrder = {
           id: orderId,
-          date: new Date().toISOString().split('T')[0],
+          date: new Date().toISOString(), // Store full ISO timestamp for proper filtering
           items: [...cart],
           total: getTotalPrice(),
           subtotal: getTotalPrice(),
@@ -4090,10 +4212,18 @@ useEffect(() => {
             name: 'Rahul Kumar', 
             phone: '+91 9876543210', 
             estimatedTime: '30 min' 
-          }
+          },
+          vendorId: cart?.[0]?.vendorId || null,
+          vendorName: cart?.[0]?.vendorName || null
         };
         
-        setOrders(prev => [newOrder, ...prev]);
+        setOrders(prev => {
+          const updatedOrders = [newOrder, ...prev];
+          console.log('Order added (fallback)! Total orders:', updatedOrders.length);
+          return updatedOrders;
+        });
+        
+        console.log('Clearing entire cart (no checkoutData)');
         clearCart();
         
         addNotification(
@@ -4103,7 +4233,12 @@ useEffect(() => {
         );
       }
       
-      safeSetActiveView('orders');
+      // Navigate to orders view after a brief delay to ensure state updates
+      setTimeout(() => {
+        safeSetActiveView('orders');
+        console.log('Navigated to orders view');
+      }, 200);
+      
       console.log('Payment successful! Order ID:', orderId);
       
     } catch (error) {
@@ -4155,36 +4290,10 @@ useEffect(() => {
     return true;
   });
 
-  // Effects - FIXED: Ensure trackingOrder has items property
+  // Effects - Initialize tracking order from existing orders
   useEffect(() => {
-    const ordersData = [
-      {
-        id: 'ORD001',
-        date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        items: [{ name: 'Paracetamol 500mg', quantity: 2, price: 30 }, { name: 'Vitamin C 1000mg', quantity: 1, price: 40 }],
-        total: 100,
-        subtotal: 100,
-        tip: 0,
-        status: 'Delivered',
-        trackingAvailable: false
-      },
-      {
-        id: 'ORD002',
-        date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        items: [{ name: 'Aspirin 75mg', quantity: 1, price: 25 }],
-        total: 25,
-        subtotal: 25,
-        tip: 0,
-        status: 'In Transit',
-        trackingAvailable: true,
-        deliveryPartner: { name: 'Rahul Kumar', phone: '+91 9876543210', estimatedTime: '25 min' }
-      }
-    ];
-    
-    setOrders(ordersData);
-    
-    // Set trackingOrder with proper items array
-    const trackingOrderData = ordersData.find(o => o.trackingAvailable && (o.status === 'In Transit' || o.status === 'On the Way'));
+    // Set trackingOrder with proper items array from existing orders
+    const trackingOrderData = orders.find(o => o.trackingAvailable && (o.status === 'In Transit' || o.status === 'On the Way'));
     if (trackingOrderData) {
       setTrackingOrder({
         ...trackingOrderData,
@@ -5295,12 +5404,8 @@ useEffect(() => {
         {activeView === 'orders' && (
           <OrdersView
             orders={orders}
-            filteredOrders={filteredOrders}
             startLiveTracking={startLiveTracking}
-            orderFilter={orderFilter}
-            setOrderFilter={setOrderFilter}
             setActiveView={safeSetActiveView}
-            colors={COLORS}
           />
         )}
         {activeView === 'medicine' && (

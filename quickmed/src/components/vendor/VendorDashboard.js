@@ -2878,17 +2878,6 @@ import VendorProfile from './VendorProfile';
 import { initialData, user as defaultUser, stockFilters, getOrderTabs } from './VendorData';
 
 const VendorDashboard = ({ user = defaultUser, onLogout }) => {
-  const markOrderReady = () => {
-  console.log("markOrderReady called");
-};
-
-const handleSaveNotificationSettings = () => {
-  console.log("save notification settings");
-};
-
-const handleClearAllNotifications = () => {
-  console.log("clear notifications");
-};
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -3104,12 +3093,44 @@ const handleClearAllNotifications = () => {
     return !Object.values(errors).some(error => error);
   };
 
-  // Initialize state with mock data
- useEffect(() => {
-  // setStock(initialData.stock);
- 
+  // Fetch orders from backend
+  const fetchOrders = useCallback(() => {
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
 
-  setOrders(initialData.orders);
+    fetch("http://127.0.0.1:8000/api/vendor/orders/", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.pending || data.ready || data.picked || data.cancelled) {
+          // Backend returns orders grouped by status
+          setOrders({
+            pending: data.pending || [],
+            ready: data.ready || [],
+            picked: data.picked || [],
+            cancelled: data.cancelled || [],
+            confirmed: data.confirmed || [],
+            delivered: data.delivered || []
+          });
+        } else {
+          // Fallback to empty orders if format is unexpected
+          setOrders({ pending: [], ready: [], picked: [], cancelled: [] });
+        }
+      })
+      .catch(err => {
+        console.error("Orders fetch error", err);
+        // On error, use empty orders instead of static data
+        setOrders({ pending: [], ready: [], picked: [], cancelled: [] });
+      });
+  }, []);
+
+  // Initialize state with backend data
+ useEffect(() => {
+  // Fetch orders from backend instead of static data
+  fetchOrders();
   setPrescriptions(initialData.prescriptions);
 
   if (!user?.email) return;
@@ -3197,37 +3218,15 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, [prescriptions.length, notificationSettings.prescriptionVerification]);
 
-  // Simulate new order notifications
+  // Poll for new orders from backend (refresh every 30 seconds)
   useEffect(() => {
+    // Initial fetch is done in the main useEffect, this is for polling
     const orderInterval = setInterval(() => {
-      if (Math.random() < 0.05 && orders.pending.length < 10) {
-        const newOrder = {
-          id: `ORD-00${orders.pending.length + orders.ready.length + orders.picked.length + orders.cancelled.length + 1}`,
-          customerName: 'New Customer',
-          customerPhone: '+91 98765 43299',
-          items: [
-            { name: 'Paracetamol 500mg', quantity: 1, price: 15 }
-          ],
-          total: 15,
-          orderTime: new Date().toLocaleString(),
-          deliveryType: Math.random() > 0.5 ? 'home' : 'pickup',
-          address: 'New Address, Sector 62, Noida',
-          prescriptionRequired: false
-        };
-        
-        setOrders(prev => ({
-          ...prev,
-          pending: [...prev.pending, newOrder]
-        }));
-        
-        if (notificationSettings.newOrders) {
-          showNotification('New Order Received', `Order ${newOrder.id} from ${newOrder.customerName}`);
-        }
-      }
-    }, 15000);
+      fetchOrders();
+    }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(orderInterval);
-  }, [orders, notificationSettings.newOrders]);
+  }, [fetchOrders]);
 
   const formatIndianCurrency = (amount) => {
     return `₹${amount.toLocaleString('en-IN')}`;
@@ -3352,6 +3351,18 @@ useEffect(() => {
     if (title.includes('Prescription')) return 'prescription';
     if (title.includes('Stock') || title.includes('Expiring')) return 'stock';
     return 'system';
+  };
+
+  // Notification Settings Functions
+  const handleSaveNotificationSettings = () => {
+    console.log('Notification settings saved:', notificationSettings);
+    setShowNotificationsModal(false);
+    showNotification('Settings Saved', 'Notification settings updated successfully');
+  };
+
+  // Notifications Functions
+  const handleClearAllNotifications = () => {
+    setNotifications([]);
   };
 
   // Medicine Management Functions
@@ -3536,15 +3547,56 @@ const handleProfileUpdate = () => {
 };
 
 
-  const markOrderPicked = (orderId) => {
-    const order = orders.ready.find(o => o.id === orderId);
-    if (order) {
-      setOrders(prev => ({
-        ...prev,
-        ready: prev.ready.filter(o => o.id !== orderId),
-        picked: [...prev.picked, order]
-      }));
+  // Update order status in backend
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        console.error("No authentication token found");
+        return false;
+      }
+
+      const response = await fetch(`http://127.0.0.1:8000/api/vendor/orders/${orderId}/status/`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (response.ok) {
+        // Refresh orders from backend after successful update
+        fetchOrders();
+        return true;
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error updating order status:', errorData);
+        return false;
+      }
+    } catch (error) {
+      console.error('Exception updating order status:', error);
+      return false;
+    }
+  };
+
+  const markOrderReady = async (orderId) => {
+    const success = await updateOrderStatus(orderId, 'ready');
+    if (success) {
       setSelectedOrder(null);
+      showNotification('Order Ready', `Order ${orderId} is now ready`);
+    } else {
+      alert('Failed to update order status. Please try again.');
+    }
+  };
+
+  const markOrderPicked = async (orderId) => {
+    const success = await updateOrderStatus(orderId, 'picked');
+    if (success) {
+      setSelectedOrder(null);
+      showNotification('Order Picked', `Order ${orderId} has been marked as picked`);
+    } else {
+      alert('Failed to update order status. Please try again.');
     }
   };
 
@@ -3552,16 +3604,13 @@ const handleProfileUpdate = () => {
     alert(`Printing label for order ${orderId}`);
   };
 
-  const cancelOrder = (orderId) => {
-    const order = orders.pending.find(o => o.id === orderId);
-    if (order) {
-      setOrders(prev => ({
-        ...prev,
-        pending: prev.pending.filter(o => o.id !== orderId),
-        cancelled: [...prev.cancelled, { ...order, cancelledTime: new Date().toLocaleString() }]
-      }));
+  const cancelOrder = async (orderId) => {
+    const success = await updateOrderStatus(orderId, 'cancelled');
+    if (success) {
       setSelectedOrder(null);
       showNotification('Order Cancelled', `Order ${orderId} has been cancelled`);
+    } else {
+      alert('Failed to cancel order. Please try again.');
     }
   };
 
