@@ -5,6 +5,7 @@ from accounts.models import UserProfile   # ✅ ADD THIS
 class VendorMedicineSerializer(serializers.ModelSerializer):
     vendor_name = serializers.CharField(source='vendor.pharmacy_name', read_only=True, required=False)
     vendor_email = serializers.CharField(source='vendor.email', read_only=True, required=False)
+    vendor_id = serializers.IntegerField(source='vendor.id', read_only=True, required=False)
     
     class Meta:
         model = VendorMedicine
@@ -21,6 +22,7 @@ class VendorMedicineSerializer(serializers.ModelSerializer):
             "prescription_required",
             "vendor_name",
             "vendor_email",
+            "vendor_id",
         ]
 
 

@@ -3399,6 +3399,8 @@ useEffect(() => {
           minStock: medicine.min_stock || medicine.minStock,
           supplier: medicine.supplier,
           vendor: medicine.vendor_name || medicine.vendor || 'QuickMed Pharmacy', // Vendor/pharmacy name
+          vendorId: medicine.vendor_id || medicine.vendorId || null, // Vendor ID for order assignment
+          vendor_name: medicine.vendor_name || medicine.vendor || 'QuickMed Pharmacy', // For consistency
         }));
         setMedicines(transformedMedicines);
       } else {
@@ -4120,38 +4122,24 @@ useEffect(() => {
       
       // If checkoutData is provided (from CartView with tip), use it
       if (checkoutData) {
-        // Get vendor info from cart items - check both vendorName and vendor_name
-        const vendorInfo = checkoutData.cartItems?.[0] || {};
-        const vendorId = vendorInfo.vendorId || vendorInfo.vendor_id || null;
-        const vendorName = vendorInfo.vendorName || vendorInfo.vendor_name || vendorInfo.vendor || null;
+        const cartItems = checkoutData.cartItems || [];
         
-        // Prepare order data for backend
-        const orderDataForBackend = {
-          orderId: orderId,
-          id: orderId,
-          items: (checkoutData.cartItems || []).map(item => ({
-            name: item.name || item.medicine_name,
-            quantity: item.quantity || 1,
-            price: item.price || 0
-          })),
-          subtotal: checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0)),
-          tip: checkoutData.tip || 0,
-          total: checkoutData.totalAmount || getTotalPrice(),
-          vendorId: vendorId,
-          vendorName: vendorName,
-          deliveryType: 'home',
-          address: checkoutData.address || null,
-          paymentId: paymentResponse.razorpay_payment_id,
-          razorpayOrderId: paymentResponse.razorpay_order_id,
-          razorpaySignature: paymentResponse.razorpay_signature,
-          customerName: checkoutData.address?.fullName || profile?.fullName || user?.email || 'Customer',
-          customerPhone: checkoutData.address?.phone || profile?.phone || '',
-          prescriptionRequired: (checkoutData.cartItems || []).some(item => item.prescriptionRequired || item.prescription_required)
-        };
+        // Group items by vendor to create separate orders for each vendor
+        const itemsByVendor = {};
         
-        // Save to backend (don't wait for it to complete - do it asynchronously)
-        saveOrderToBackend(orderDataForBackend).catch(err => {
-          console.error('Background order save failed:', err);
+        cartItems.forEach(item => {
+          // Get vendor ID - check multiple possible field names
+          const vendorId = item.vendorId || item.vendor_id || 'unknown';
+          const vendorName = item.vendorName || item.vendor_name || item.vendor || 'Unknown Vendor';
+          
+          if (!itemsByVendor[vendorId]) {
+            itemsByVendor[vendorId] = {
+              vendorId: vendorId !== 'unknown' ? vendorId : null,
+              vendorName: vendorName,
+              items: []
+            };
+          }
+          itemsByVendor[vendorId].items.push(item);
         });
         
         // Format address for display
@@ -4172,36 +4160,95 @@ useEffect(() => {
         
         const deliveryAddress = formatAddress(checkoutData.address);
         
-        // Create local order for immediate UI update
-        const newOrder = {
-          id: orderId,
-          date: new Date().toISOString(), // Store full ISO timestamp for proper filtering
-          items: checkoutData.cartItems || [],
-          total: checkoutData.totalAmount || getTotalPrice(),
-          subtotal: checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0)),
-          tip: checkoutData.tip || 0,
-          status: 'Confirmed',
-          paymentId: paymentResponse.razorpay_payment_id,
-          orderId: paymentResponse.razorpay_order_id,
-          signature: paymentResponse.razorpay_signature,
-          trackingAvailable: true,
-          deliveryPartner: { 
-            name: 'Rahul Kumar', 
-            phone: '+91 9876543210', 
-            estimatedTime: '30 min' 
-          },
-          address: checkoutData.address || null,
-          deliveryAddress: deliveryAddress, // Formatted address string for display
-          selectedItems: checkoutData.selectedItems || [],
-          vendorId: vendorId,
-          vendorName: vendorName,
-          // Also include vendor_name for compatibility with backend serializer
-          vendor_name: vendorName
-        };
+        // Calculate total subtotal for tip distribution
+        const totalSubtotal = checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0));
+        const totalTip = checkoutData.tip || 0;
         
+        // Create separate orders for each vendor
+        const orderPromises = [];
+        const newOrders = [];
+        let orderCounter = 0;
+        
+        Object.values(itemsByVendor).forEach(vendorGroup => {
+          const vendorOrderId = `${orderId}-${orderCounter}`;
+          orderCounter++;
+          
+          // Calculate totals for this vendor's items
+          const vendorSubtotal = vendorGroup.items.reduce((sum, item) => {
+            return sum + ((item.price || 0) * (item.quantity || 1));
+          }, 0);
+          
+          // Split tip proportionally based on subtotal
+          const vendorTip = totalSubtotal > 0 ? (totalTip * (vendorSubtotal / totalSubtotal)) : 0;
+          const vendorTotal = vendorSubtotal + vendorTip;
+          
+          // Prepare order data for this vendor
+          const orderDataForBackend = {
+            orderId: vendorOrderId,
+            id: vendorOrderId,
+            items: vendorGroup.items.map(item => ({
+              name: item.name || item.medicine_name,
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              medicine_id: item.id || null,
+              vendor_id: item.vendorId || item.vendor_id || null
+            })),
+            subtotal: vendorSubtotal,
+            tip: vendorTip,
+            total: vendorTotal,
+            vendorId: vendorGroup.vendorId,
+            vendorName: vendorGroup.vendorName,
+            deliveryType: 'home',
+            address: checkoutData.address || null,
+            paymentId: paymentResponse.razorpay_payment_id,
+            razorpayOrderId: paymentResponse.razorpay_order_id,
+            razorpaySignature: paymentResponse.razorpay_signature,
+            customerName: checkoutData.address?.fullName || profile?.fullName || user?.email || 'Customer',
+            customerPhone: checkoutData.address?.phone || profile?.phone || '',
+            prescriptionRequired: vendorGroup.items.some(item => item.prescriptionRequired || item.prescription_required)
+          };
+          
+          // Save each vendor order to backend
+          orderPromises.push(
+            saveOrderToBackend(orderDataForBackend).catch(err => {
+              console.error(`Background order save failed for vendor ${vendorGroup.vendorId}:`, err);
+              return null;
+            })
+          );
+          
+          // Create local order for immediate UI update
+          const newOrder = {
+            id: vendorOrderId,
+            date: new Date().toISOString(),
+            items: vendorGroup.items,
+            total: vendorTotal,
+            subtotal: vendorSubtotal,
+            tip: vendorTip,
+            status: 'Confirmed',
+            paymentId: paymentResponse.razorpay_payment_id,
+            orderId: paymentResponse.razorpay_order_id,
+            signature: paymentResponse.razorpay_signature,
+            trackingAvailable: true,
+            deliveryPartner: { 
+              name: 'Rahul Kumar', 
+              phone: '+91 9876543210', 
+              estimatedTime: '30 min' 
+            },
+            address: checkoutData.address || null,
+            deliveryAddress: deliveryAddress,
+            selectedItems: vendorGroup.items.map(item => item.id),
+            vendorId: vendorGroup.vendorId,
+            vendorName: vendorGroup.vendorName,
+            vendor_name: vendorGroup.vendorName
+          };
+          
+          newOrders.push(newOrder);
+        });
+        
+        // Add all orders to state
         setOrders(prev => {
-          const updatedOrders = [newOrder, ...prev];
-          console.log('Order added! Total orders:', updatedOrders.length);
+          const updatedOrders = [...newOrders, ...prev];
+          console.log(`Orders added! Created ${newOrders.length} order(s) for ${Object.keys(itemsByVendor).length} vendor(s). Total orders:`, updatedOrders.length);
           return updatedOrders;
         });
         
@@ -4232,11 +4279,21 @@ useEffect(() => {
           }
         }
         
-        addNotification(
-          'Order Confirmed', 
-          `Your order ${orderId} has been placed successfully${checkoutData.tip > 0 ? ` with a ₹${checkoutData.tip} tip` : ''}`, 
-          'order'
-        );
+        // Show notification for multiple orders
+        const vendorCount = Object.keys(itemsByVendor).length;
+        if (vendorCount > 1) {
+          addNotification(
+            'Orders Confirmed', 
+            `Your ${vendorCount} order(s) have been placed successfully${totalTip > 0 ? ` with a ₹${totalTip} tip` : ''}`, 
+            'order'
+          );
+        } else {
+          addNotification(
+            'Order Confirmed', 
+            `Your order ${orderId} has been placed successfully${totalTip > 0 ? ` with a ₹${totalTip} tip` : ''}`, 
+            'order'
+          );
+        }
         
       } else {
         // Original logic for regular checkout (fallback)

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
      'rest_framework_simplejwt',
     'corsheaders',
     'accounts',#login,signup,profilesuser,vender,doctor
+    'user',#user orders
     'home',#contact,review
     'delivery',#for delivery logn and signup all remaing delivery portal
     'venderdashboard',
