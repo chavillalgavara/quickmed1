@@ -3378,8 +3378,7 @@ const UserDashboardContent = ({ user, onLogout, onWriteReview }) => {
   useEffect(() => {
     saveOrdersToLocalStorage(orders);
   }, [orders]);
-  // ✅ STEP 3: Fetch medicines from backend
-// ✅ STEP 3: Fetch PUBLIC medicines for USER
+  // ✅ STEP 3: Fetch PUBLIC medicines for USER
 useEffect(() => {
   fetch("http://127.0.0.1:8000/api/vendor/medicines/public/")
     .then((res) => res.json())
@@ -3387,7 +3386,21 @@ useEffect(() => {
       console.log("Public medicines received:", data);
 
       if (Array.isArray(data)) {
-        setMedicines(data);
+        // Transform backend data to frontend format
+        const transformedMedicines = data.map(medicine => ({
+          id: medicine.id,
+          name: medicine.medicine_name || medicine.name || 'Unknown Medicine', // Map medicine_name to name
+          category: medicine.category || 'Uncategorized',
+          price: parseFloat(medicine.price) || 0,
+          quantity: medicine.quantity || 0,
+          prescriptionRequired: medicine.prescription_required || medicine.prescriptionRequired || false,
+          expiryDate: medicine.expiry_date || medicine.expiryDate,
+          batchNo: medicine.batch_no || medicine.batchNo,
+          minStock: medicine.min_stock || medicine.minStock,
+          supplier: medicine.supplier,
+          vendor: medicine.vendor_name || medicine.vendor || 'QuickMed Pharmacy', // Vendor/pharmacy name
+        }));
+        setMedicines(transformedMedicines);
       } else {
         console.error("Public medicines API error:", data);
         setMedicines([]);
@@ -3454,14 +3467,22 @@ useEffect(() => {
       const existingItem = prev.find(item => item.id === medicine.id);
       let newCart;
       
+      // Ensure vendor information is preserved in cart items
+      const medicineWithVendor = {
+        ...medicine,
+        // Map vendor_name to vendorName for consistency
+        vendorName: medicine.vendor_name || medicine.vendorName || medicine.vendor || 'QuickMed Pharmacy',
+        vendorId: medicine.vendor_id || medicine.vendorId || null
+      };
+      
       if (existingItem) {
         newCart = prev.map(item => 
           item.id === medicine.id 
-            ? { ...item, quantity: item.quantity + 1 }
+            ? { ...item, quantity: item.quantity + 1, vendorName: medicineWithVendor.vendorName, vendorId: medicineWithVendor.vendorId }
             : item
         );
       } else {
-        newCart = [...prev, { ...medicine, quantity: 1 }];
+        newCart = [...prev, { ...medicineWithVendor, quantity: 1 }];
       }
       
       return newCart;
@@ -4099,8 +4120,10 @@ useEffect(() => {
       
       // If checkoutData is provided (from CartView with tip), use it
       if (checkoutData) {
-        // Get vendor info from cart items
+        // Get vendor info from cart items - check both vendorName and vendor_name
         const vendorInfo = checkoutData.cartItems?.[0] || {};
+        const vendorId = vendorInfo.vendorId || vendorInfo.vendor_id || null;
+        const vendorName = vendorInfo.vendorName || vendorInfo.vendor_name || vendorInfo.vendor || null;
         
         // Prepare order data for backend
         const orderDataForBackend = {
@@ -4114,8 +4137,8 @@ useEffect(() => {
           subtotal: checkoutData.subtotal || (checkoutData.totalAmount - (checkoutData.tip || 0)),
           tip: checkoutData.tip || 0,
           total: checkoutData.totalAmount || getTotalPrice(),
-          vendorId: vendorInfo.vendorId || null,
-          vendorName: vendorInfo.vendorName || null,
+          vendorId: vendorId,
+          vendorName: vendorName,
           deliveryType: 'home',
           address: checkoutData.address || null,
           paymentId: paymentResponse.razorpay_payment_id,
@@ -4130,6 +4153,24 @@ useEffect(() => {
         saveOrderToBackend(orderDataForBackend).catch(err => {
           console.error('Background order save failed:', err);
         });
+        
+        // Format address for display
+        const formatAddress = (addr) => {
+          if (!addr) return 'Not specified';
+          if (typeof addr === 'string') return addr;
+          
+          // If address is an object, format it
+          const parts = [];
+          if (addr.street) parts.push(addr.street);
+          if (addr.landmark) parts.push(addr.landmark);
+          if (addr.city) parts.push(addr.city);
+          if (addr.state) parts.push(addr.state);
+          if (addr.pincode) parts.push(addr.pincode);
+          
+          return parts.length > 0 ? parts.join(', ') : 'Not specified';
+        };
+        
+        const deliveryAddress = formatAddress(checkoutData.address);
         
         // Create local order for immediate UI update
         const newOrder = {
@@ -4150,9 +4191,12 @@ useEffect(() => {
             estimatedTime: '30 min' 
           },
           address: checkoutData.address || null,
+          deliveryAddress: deliveryAddress, // Formatted address string for display
           selectedItems: checkoutData.selectedItems || [],
-          vendorId: vendorInfo.vendorId || null,
-          vendorName: vendorInfo.vendorName || null
+          vendorId: vendorId,
+          vendorName: vendorName,
+          // Also include vendor_name for compatibility with backend serializer
+          vendor_name: vendorName
         };
         
         setOrders(prev => {
@@ -4271,10 +4315,13 @@ useEffect(() => {
   // );
  const filteredMedicines = Array.isArray(medicines)
   ? medicines.filter(medicine =>
-      medicine.medicine_name
+      (medicine.name || medicine.medicine_name || '')
         ?.toLowerCase()
         .includes(searchQuery.toLowerCase()) ||
-      medicine.category
+      (medicine.category || '')
+        ?.toLowerCase()
+        .includes(searchQuery.toLowerCase()) ||
+      (medicine.vendor || '')
         ?.toLowerCase()
         .includes(searchQuery.toLowerCase())
     )

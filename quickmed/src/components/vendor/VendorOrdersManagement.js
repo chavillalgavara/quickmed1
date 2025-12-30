@@ -557,7 +557,23 @@ const VendorOrdersManagement = ({
               <div style={customerInfoStyle}>
                 <h4 style={{...customerNameStyle, color: '#124441'}}>{selectedOrder.customerName}</h4>
                 <p style={customerPhoneStyle}>{selectedOrder.customerPhone}</p>
-                <p style={deliveryAddressStyle}>{selectedOrder.address}</p>
+                <p style={deliveryAddressStyle}>
+                  {(() => {
+                    if (!selectedOrder.address) return 'Address not available';
+                    if (typeof selectedOrder.address === 'string') return selectedOrder.address;
+                    
+                    // Format address object
+                    const addr = selectedOrder.address;
+                    const parts = [];
+                    if (addr.street) parts.push(addr.street);
+                    if (addr.landmark) parts.push(addr.landmark);
+                    if (addr.city) parts.push(addr.city);
+                    if (addr.state) parts.push(addr.state);
+                    if (addr.pincode) parts.push(addr.pincode);
+                    
+                    return parts.length > 0 ? parts.join(', ') : 'Address not available';
+                  })()}
+                </p>
               </div>
 
               <div style={orderItemsDetailedStyle}>

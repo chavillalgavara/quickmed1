@@ -17,11 +17,42 @@ const STATUS_CONFIG = {
   'Failed Delivery': { color: '#9E9E9E', icon: '⚠️', description: 'Delivery attempt failed' }
 };
 
-const VENDORS = {
-  'MEDSTORE_001': { name: 'MedPlus Mart', address: '123 Healthcare St, Mumbai', rating: '4.5', deliveryTime: '20-30 mins', contact: '+91-9876543210' },
-  'APOLLO_002': { name: 'Apollo Pharmacy', address: '456 Wellness Rd, Delhi', rating: '4.7', deliveryTime: '20-30 mins', contact: '+91-9876543211' },
-  'PHARMACY_003': { name: 'Wellness Forever', address: '789 Cure Lane, Bangalore', rating: '4.3', deliveryTime: '25-35 mins', contact: '+91-9876543212' },
-  'QUICKMED_004': { name: 'QuickMed Express', address: '321 Fast Track, Hyderabad', rating: '4.8', deliveryTime: '15-25 mins', contact: '+91-9876543213' }
+// Helper function to get vendor info from order
+const getVendorFromOrder = (order) => {
+  // Check for vendor data from backend (snake_case) or frontend (camelCase)
+  const vendorName = order.vendor_name || order.vendorName || order.vendor?.pharmacy_name || order.vendor?.name;
+  
+  if (vendorName || order.vendor) {
+    const addressParts = [];
+    if (order.vendor_address) addressParts.push(order.vendor_address);
+    if (order.vendor_city) addressParts.push(order.vendor_city);
+    if (order.vendor_state) addressParts.push(order.vendor_state);
+    if (order.vendor_pincode) addressParts.push(order.vendor_pincode);
+    
+    // Build full address
+    const fullAddress = addressParts.length > 0 
+      ? addressParts.join(', ') 
+      : (order.vendor_address || order.vendor?.business_address || 'Address not available');
+    
+    return {
+      name: vendorName || 'QuickMed Pharmacy',
+      address: fullAddress,
+      rating: order.vendor_rating || '4.5',
+      deliveryTime: order.vendor_delivery_time || '20-30 mins',
+      contact: order.vendor_phone || order.vendor?.phone || 'Contact not available',
+      email: order.vendor_email || order.vendor?.email || ''
+    };
+  }
+  
+  // Fallback to default if no vendor data
+  return {
+    name: 'QuickMed Pharmacy',
+    address: 'Address not available',
+    rating: '4.5',
+    deliveryTime: '20-30 mins',
+    contact: 'Contact not available',
+    email: ''
+  };
 };
 
 const DELIVERY_PARTNERS = {
@@ -338,7 +369,7 @@ const RatingModal = React.memo(({ order, deliveryPartner, onClose, onRatingSubmi
 
 // Order Details Modal
 const OrderDetailsModal = React.memo(({ order, onClose, startLiveTracking, showRatingModal }) => {
-  const vendor = VENDORS[order.vendorId] || VENDORS[Object.keys(VENDORS)[0]];
+  const vendor = getVendorFromOrder(order);
   const statusInfo = STATUS_CONFIG[order.status] || STATUS_CONFIG['Pending'];
   
   // Generate or use existing status timeline
@@ -521,7 +552,28 @@ const OrderDetailsModal = React.memo(({ order, onClose, startLiveTracking, showR
 
           <div style={modalStyles.infoCard}>
             <h4 style={{ margin: '0 0 1rem 0', color: '#009688' }}>📍 Delivery Information</h4>
-            <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}><strong>Address:</strong> {order.deliveryAddress || 'Not specified'}</p>
+            <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}>
+              <strong>Address:</strong> {(() => {
+                // Check for deliveryAddress first (formatted string)
+                if (order.deliveryAddress) return order.deliveryAddress;
+                
+                // If address is a string, use it
+                if (typeof order.address === 'string') return order.address;
+                
+                // If address is an object, format it
+                if (order.address && typeof order.address === 'object') {
+                  const parts = [];
+                  if (order.address.street) parts.push(order.address.street);
+                  if (order.address.landmark) parts.push(order.address.landmark);
+                  if (order.address.city) parts.push(order.address.city);
+                  if (order.address.state) parts.push(order.address.state);
+                  if (order.address.pincode) parts.push(order.address.pincode);
+                  return parts.length > 0 ? parts.join(', ') : 'Not specified';
+                }
+                
+                return 'Not specified';
+              })()}
+            </p>
             <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}><strong>Payment:</strong> {order.paymentMethod || 'Online'}</p>
             <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}><strong>Delivery Speed:</strong> {vendor.deliveryTime}</p>
           </div>
@@ -550,7 +602,7 @@ const OrderDetailsModal = React.memo(({ order, onClose, startLiveTracking, showR
 
 // Order Card Component
 const OrderCard = React.memo(({ order, onViewDetails, startLiveTracking, showRatingModal }) => {
-  const vendor = VENDORS[order.vendorId] || VENDORS[Object.keys(VENDORS)[0]];
+  const vendor = getVendorFromOrder(order);
   const statusInfo = STATUS_CONFIG[order.status] || STATUS_CONFIG['Pending'];
   
   // Calculate estimated delivery
@@ -629,7 +681,26 @@ const OrderCard = React.memo(({ order, onViewDetails, startLiveTracking, showRat
       <div style={cardStyles.footer}>
         <div style={{ flex: 1, minWidth: '200px' }}>
           <div style={{ color: '#4F6F6B', fontSize: '0.75rem', marginBottom: '0.3rem' }}>
-            <strong>📍 Delivery:</strong> {order.deliveryAddress || 'Address not specified'}
+            <strong>📍 Delivery:</strong> {(() => {
+              // Check for deliveryAddress first (formatted string)
+              if (order.deliveryAddress) return order.deliveryAddress;
+              
+              // If address is a string, use it
+              if (typeof order.address === 'string') return order.address;
+              
+              // If address is an object, format it
+              if (order.address && typeof order.address === 'object') {
+                const parts = [];
+                if (order.address.street) parts.push(order.address.street);
+                if (order.address.landmark) parts.push(order.address.landmark);
+                if (order.address.city) parts.push(order.address.city);
+                if (order.address.state) parts.push(order.address.state);
+                if (order.address.pincode) parts.push(order.address.pincode);
+                return parts.length > 0 ? parts.join(', ') : 'Address not specified';
+              }
+              
+              return 'Address not specified';
+            })()}
           </div>
           <div style={{ color: '#4F6F6B', fontSize: '0.75rem' }}>
             <strong>📅 Ordered:</strong> {new Date(order.date).toLocaleDateString()} at {new Date(order.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -680,7 +751,7 @@ const OrdersView = ({ orders: initialOrders, setActiveView, startLiveTracking })
   // Default live tracking function if not provided
   const defaultStartLiveTracking = useCallback((order) => {
     const estimatedTime = calculateEstimatedDelivery(order.date);
-    const vendor = VENDORS[order.vendorId] || VENDORS[Object.keys(VENDORS)[0]];
+    const vendor = getVendorFromOrder(order);
     
     alert(`🚚 Live Tracking Started for Order #${order.id}\n\n📊 Order Details:\n• Status: ${order.status}\n• Pharmacy: ${vendor.name}\n• Estimated Delivery: ${formatTime(estimatedTime)}\n• Delivery Time: ${vendor.deliveryTime}\n\n📍 Tracking Features:\n• Real-time GPS location of delivery partner\n• Live route visualization on map\n• Estimated arrival time updates\n• Delivery progress tracking\n• Traffic and route optimization\n\nThis would normally show an interactive map with live tracking.`);
   }, []);
